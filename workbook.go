@@ -26,14 +26,16 @@ type WorkBook struct {
 	continue_rich  uint16
 	continue_apsb  uint32
 	dateMode       uint16
+	fileCloser     io.Closer // holds the file handle for cleanup
 }
 
 //read workbook from ole2 file
-func newWorkBookFromOle2(rs io.ReadSeeker) *WorkBook {
+func newWorkBookFromOle2(rs io.ReadSeeker, closer io.Closer) *WorkBook {
 	wb := new(WorkBook)
 	wb.Formats = make(map[uint16]*Format)
 	// wb.bts = bts
 	wb.rs = rs
+	wb.fileCloser = closer
 	wb.sheets = make([]*WorkSheet, 0)
 	wb.Parse(rs)
 	return wb
@@ -280,6 +282,42 @@ func (w *WorkBook) GetSheet(num int) *WorkSheet {
 //Get the number of all sheets, look into example
 func (w *WorkBook) NumSheets() int {
 	return len(w.sheets)
+}
+
+// Close releases all resources associated with the workbook.
+// It closes the underlying file handle if one was opened via Open() or OpenWithCloser().
+// After calling Close(), the WorkBook should not be used.
+func (w *WorkBook) Close() error {
+	if w.fileCloser != nil {
+		err := w.fileCloser.Close()
+		w.fileCloser = nil
+		return err
+	}
+	return nil
+}
+
+// ReleaseMemory frees memory-intensive data structures while keeping the workbook usable.
+// This releases:
+// - Shared String Table (SST) - can use 8GB+ for large files
+// - Parsed worksheet data
+// - Font and format caches
+// After calling this, you'll need to re-parse sheets to access their data.
+func (w *WorkBook) ReleaseMemory() {
+	// Release the massive SST (Shared String Table)
+	w.sst = nil
+
+	// Release parsed worksheet data
+	for _, sheet := range w.sheets {
+		if sheet != nil {
+			sheet.rows = nil
+			sheet.parsed = false
+		}
+	}
+
+	// Release format and font caches
+	w.Xfs = nil
+	w.Fonts = nil
+	w.Formats = nil
 }
 
 //helper function to read all cells from file
